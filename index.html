@@ -410,10 +410,19 @@ const Engine = (() => {
   }
   function send(cmd){ if(worker) worker.postMessage(cmd); }
 
-  /* analyze one FEN to a fixed depth; resolves with {cp|mate, bestUci, pv[]} */
-  function analyse(fen, depth){
+  /* analyze one FEN to a target depth, but never hang:
+     - if it runs past maxMs, ask the engine to `stop` (it then emits bestmove)
+     - absolute fallback resolves with best-so-far even if bestmove never comes */
+  function analyse(fen, depth, maxMs){
     return new Promise((resolve)=>{
-      let best={cp:0}, bestUci=null, pv=[];
+      let best={cp:0}, bestUci=null, pv=[], done=false;
+      const finish=()=>{
+        if(done) return; done=true;
+        clearTimeout(stopT); clearTimeout(hardT); onLine=null;
+        resolve({score:best, bestUci:bestUci||"(none)", pv});
+      };
+      const stopT=setTimeout(()=>{ send("stop"); }, maxMs);
+      const hardT=setTimeout(finish, maxMs+4000);
       onLine=(line)=>{
         if(line.startsWith("info")){
           const mMate=line.match(/score mate (-?\d+)/);
@@ -423,9 +432,9 @@ const Engine = (() => {
           else if(mCp) best={cp:parseInt(mCp[1],10)};
           if(mPv) pv=mPv[1].trim().split(/\s+/);
         }else if(line.startsWith("bestmove")){
-          bestUci=line.split(/\s+/)[1];
-          onLine=null;
-          resolve({score:best, bestUci, pv});
+          const bm=line.split(/\s+/)[1];
+          if(bm && bm!=="(none)") bestUci=bm;
+          finish();
         }
       };
       send("position fen "+fen);
@@ -778,10 +787,14 @@ async function analyzeGame(){
 
   const prog=document.getElementById("prog"); prog.classList.add("show");
   const bar=prog.firstElementChild;
+  // worst-case time per position scales with chosen depth (the cap rarely bites on easy positions)
+  const maxMs = analysisDepth<=10 ? 1500 : analysisDepth<=13 ? 2800 : 5000;
+  const statusEl=document.getElementById("engineStatus");
 
   // 1) evaluate every position once (best move + score from side-to-move POV)
   for(let i=0;i<positions.length;i++){
-    const {score,bestUci,pv}=await Engine.analyse(positions[i].fen, analysisDepth);
+    statusEl.textContent=`analyzing ${i+1}/${positions.length}…`;
+    const {score,bestUci,pv}=await Engine.analyse(positions[i].fen, analysisDepth, maxMs);
     nodes[i]={score,bestUci,pv,bestSan:uciToSan(positions[i].fen,bestUci)};
     bar.style.width=((i+1)/positions.length*100).toFixed(1)+"%";
     if(i%2===0){ // show progress on the board as it goes
