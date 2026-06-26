@@ -323,14 +323,16 @@ const CLASS_META = {
 };
 const ORDER = ["Best","Excellent","Good","Inaccuracy","Mistake","Blunder"];
 
-const SAMPLE_PGN = `[Event "Sample game"]
-[White "Player"]
-[Black "Opponent"]
+const SAMPLE_PGN = `[Event "Opera Game"]
+[White "Morphy"]
+[Black "Allies"]
+[Site "Paris"]
+[Date "1858.??.??"]
 
-1. e4 e5 2. Nf3 Nc6 3. Bc4 Nf6 4. Ng5 d5 5. exd5 Nxd5 6. Nxf7 Kxf7
-7. Qf3+ Ke6 8. Nc3 Ncb4 9. a3 Nxc3 10. bxc3 Nd5 11. Bxd5+ Kd6
-12. Qf7 Qe7 13. Qxe7+ Bxe7 14. O-O Rf8 15. d4 exd4 16. cxd4 Bd7
-17. Re1 Bf6 18. c3 Kc6 19. Bf4 Rad8 20. Be3 b6 21. Rab1 Kb7 22. d5 *`;
+1. e4 e5 2. Nf3 d6 3. d4 Bg4 4. dxe5 Bxf3 5. Qxf3 dxe5 6. Bc4 Nf6
+7. Qb3 Qe7 8. Nc3 c6 9. Bg5 b5 10. Nxb5 cxb5 11. Bxb5+ Nbd7
+12. O-O-O Rd8 13. Rxd7 Rxd7 14. Rd1 Qe6 15. Bxd7+ Nxd7 16. Qb8+ Nxb8
+17. Rd8#`;
 
 /* clamp a (possibly mate) UCI score to a centipawn number suitable for win% */
 function scoreToCp(s){              // s = {mate:?, cp:?}
@@ -719,12 +721,29 @@ document.addEventListener("keydown",e=>{
    ============================================================ */
 const startFEN="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
+function loadPgnResilient(game, pgn){
+  // 1) as-is — chess.js handles headers, clk comments, CRLF, bare movetext
+  if(game.load_pgn(pgn, {sloppy:true})) return true;
+  // 2) normalized line endings + trimmed
+  const norm = pgn.replace(/\r\n?/g, "\n").trim();
+  if(game.load_pgn(norm, {sloppy:true})) return true;
+  // 3) strip {comments}, (variations) and $NAGs, but keep the header/movetext split
+  const splitAt = norm.search(/\n[ \t]*\n/);
+  let headers = "", moves = norm;
+  if(splitAt >= 0){ headers = norm.slice(0, splitAt); moves = norm.slice(splitAt); }
+  moves = moves.replace(/\{[^}]*\}/g, " ")
+               .replace(/\([^()]*\)/g, " ")
+               .replace(/\$\d+/g, " ");
+  const rebuilt = (headers ? headers + "\n\n" : "") + moves.trim();
+  return game.load_pgn(rebuilt, {sloppy:true});
+}
+
 function buildPositionsFromPGN(pgn){
   const game=new Chess();
-  const ok=game.load_pgn(pgn,{sloppy:true});
-  if(!ok) throw new Error("Couldn't read that PGN. Check the move text and try again.");
+  if(!loadPgnResilient(game, pgn))
+    throw new Error("Couldn't read that PGN — it may contain an illegal move or an unsupported format.");
   const history=game.history({verbose:true});
-  if(!history.length) throw new Error("No moves found in that PGN.");
+  if(!history.length) throw new Error("That game has no moves to analyze.");
   // replay to capture FEN + SAN + UCI at every ply
   const replay=new Chess();
   const list=[{fen:startFEN, stm:"w", sanLed:null, uciLed:null, ply:0}];
