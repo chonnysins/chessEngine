@@ -238,10 +238,10 @@
     <label class="tiny or-label" for="pgn">or paste a PGN</label>
     <textarea id="pgn" placeholder='1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 …   (or paste a full PGN with headers from chess.com / lichess)' spellcheck="false"></textarea>
     <div class="io-row">
-      <div class="seg" id="depthSeg" title="Higher = more accurate but slower">
-        <button data-depth="10">Fast</button>
-        <button data-depth="13" class="on">Balanced</button>
-        <button data-depth="16">Deep</button>
+      <div class="seg" id="depthSeg" title="More time per move = stronger but slower">
+        <button data-mt="200">Fast</button>
+        <button data-mt="500" class="on">Balanced</button>
+        <button data-mt="1200">Deep</button>
       </div>
       <span class="grow"></span>
       <button id="sampleBtn">Load sample game</button>
@@ -410,19 +410,19 @@ const Engine = (() => {
   }
   function send(cmd){ if(worker) worker.postMessage(cmd); }
 
-  /* analyze one FEN to a target depth, but never hang:
-     - if it runs past maxMs, ask the engine to `stop` (it then emits bestmove)
-     - absolute fallback resolves with best-so-far even if bestmove never comes */
-  function analyse(fen, depth, maxMs){
+  /* analyze one FEN for a fixed time budget (ms). `go movetime` is enforced
+     *inside* the engine, so it stops on its own — reliable on any machine and
+     immune to the worker not receiving a `stop` mid-search. */
+  function analyse(fen, movetime){
     return new Promise((resolve)=>{
       let best={cp:0}, bestUci=null, pv=[], done=false;
       const finish=()=>{
         if(done) return; done=true;
-        clearTimeout(stopT); clearTimeout(hardT); onLine=null;
+        clearTimeout(hardT); onLine=null;
         resolve({score:best, bestUci:bestUci||"(none)", pv});
       };
-      const stopT=setTimeout(()=>{ send("stop"); }, maxMs);
-      const hardT=setTimeout(finish, maxMs+4000);
+      // safety net only — should never fire, since the engine self-stops at movetime
+      const hardT=setTimeout(finish, movetime+3000);
       onLine=(line)=>{
         if(line.startsWith("info")){
           const mMate=line.match(/score mate (-?\d+)/);
@@ -438,7 +438,7 @@ const Engine = (() => {
         }
       };
       send("position fen "+fen);
-      send("go depth "+depth);
+      send("go movetime "+movetime);
     });
   }
   return {init, analyse, get ready(){return ready;}};
@@ -452,7 +452,7 @@ let nodes=[];       // analysis per position: {score, bestUci, bestSan, pv}
 let moveInfo=[];    // per played move (index = ply it created): {cls, wpLoss, bestSan, bestUci, playedSan}
 let cur=0;          // current node index being viewed
 let flipped=false;
-let analysisDepth=13;
+let moveTime=500;   // ms per position (engine self-limits via `go movetime`)
 let busy=false;
 
 /* ============================================================
@@ -787,14 +787,12 @@ async function analyzeGame(){
 
   const prog=document.getElementById("prog"); prog.classList.add("show");
   const bar=prog.firstElementChild;
-  // worst-case time per position scales with chosen depth (the cap rarely bites on easy positions)
-  const maxMs = analysisDepth<=10 ? 1500 : analysisDepth<=13 ? 2800 : 5000;
   const statusEl=document.getElementById("engineStatus");
 
   // 1) evaluate every position once (best move + score from side-to-move POV)
   for(let i=0;i<positions.length;i++){
     statusEl.textContent=`analyzing ${i+1}/${positions.length}…`;
-    const {score,bestUci,pv}=await Engine.analyse(positions[i].fen, analysisDepth, maxMs);
+    const {score,bestUci,pv}=await Engine.analyse(positions[i].fen, moveTime);
     nodes[i]={score,bestUci,pv,bestSan:uciToSan(positions[i].fen,bestUci)};
     bar.style.width=((i+1)/positions.length*100).toFixed(1)+"%";
     if(i%2===0){ // show progress on the board as it goes
@@ -934,7 +932,7 @@ document.getElementById("analyzeBtn").onclick=analyzeGame;
 document.querySelectorAll("#depthSeg button").forEach(b=>{
   b.onclick=()=>{
     document.querySelectorAll("#depthSeg button").forEach(x=>x.classList.remove("on"));
-    b.classList.add("on"); analysisDepth=+b.dataset.depth;
+    b.classList.add("on"); moveTime=+b.dataset.mt;
   };
 });
 
